@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ruoyi
+resources:
+  - namespace.yaml
+  - configmap-ruoyi-env.yaml
+  - secret-mysql.yaml
+  - mysql-statefulset.yaml
+  - redis-statefulset.yaml
+  - nacos-statefulset.yaml
+  - sentinel-deployment.yaml
+  - deployment-ruoyi-gateway.yaml
+  - deployment-ruoyi-auth.yaml
+  - deployment-ruoyi-system.yaml
+  - deployment-ruoyi-file.yaml
+  - deployment-ruoyi-gen.yaml
+  - deployment-ruoyi-job.yaml
+  - deployment-ruoyi-monitor.yaml
+  - deployment-ruoyi-ui.yaml
+  - ingress-ruoyi.yaml
+images:
+  - name: harbor.example.com/ruoyi/ruoyi-gateway
+    newTag: latest
+  - name: harbor.example.com/ruoyi/ruoyi-auth
+    newTag: latest
+  - name: harbor.example.com/ruoyi/ruoyi-modules-system
+    newTag: latest
+  - name: harbor.example.com/ruoyi/ruoyi-modules-file
+    newTag: latest
+  - name: harbor.example.com/ruoyi/ruoyi-modules-gen
+    newTag: latest
+  - name: harbor.example.com/ruoyi/ruoyi-modules-job
+    newTag: latest
+  - name: harbor.example.com/ruoyi/ruoyi-visual-monitor
+    newTag: latest
+  - name: harbor.example.com/ruoyi/ruoyi-ui
+    newTag: latest
