@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ruoyi
+  namespace: ruoyi
+  labels:
+    app.kubernetes.io/name: ruoyi
+    app.kubernetes.io/part-of: ruoyi-cloud
+  annotations:
+    kubernetes.io/ingress.class: nginx
+spec:
+  rules:
+    - host: gateway.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ruoyi-gateway
+                port:
+                  name: http
+    - host: ruoyi.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ruoyi-ui
+                port:
+                  name: http

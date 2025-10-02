@@ -1,0 +1,120 @@
+pipeline {
+  agent { label 'docker' }
+  environment {
+    REGISTRY = "harbor.example.com"
+    HARBOR_PROJECT = "ruoyi"
+    K8S_NAMESPACE = "ruoyi"
+    NPM_REGISTRY = "https://registry.npmmirror.com"
+  }
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+    disableConcurrentBuilds()
+    timestamps()
+  }
+  triggers {
+    pollSCM('@daily')
+  }
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
+    }
+    stage('Initialize') {
+      steps {
+        script {
+          env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'snapshot'}"
+          env.BUILD_DATE = sh(returnStdout: true, script: 'date -u +%Y%m%d%H%M%S').trim()
+        }
+      }
+    }
+    stage('Maven Build') {
+      steps {
+        sh 'mvn -B clean package -DskipTests'
+      }
+    }
+    stage('Frontend Build') {
+      steps {
+        dir('ruoyi-ui') {
+          sh 'npm install --registry=${NPM_REGISTRY}'
+          sh 'npm run build:prod'
+        }
+      }
+    }
+    stage('Prepare Docker Context') {
+      steps {
+        sh 'cd docker && bash copy.sh'
+      }
+    }
+    stage('Build & Push Images') {
+      steps {
+        script {
+          def services = [
+            [name: 'ruoyi-gateway', context: 'docker/ruoyi/gateway'],
+            [name: 'ruoyi-auth', context: 'docker/ruoyi/auth'],
+            [name: 'ruoyi-modules-system', context: 'docker/ruoyi/modules/system'],
+            [name: 'ruoyi-modules-file', context: 'docker/ruoyi/modules/file'],
+            [name: 'ruoyi-modules-gen', context: 'docker/ruoyi/modules/gen'],
+            [name: 'ruoyi-modules-job', context: 'docker/ruoyi/modules/job'],
+            [name: 'ruoyi-visual-monitor', context: 'docker/ruoyi/visual/monitor'],
+            [name: 'ruoyi-ui', context: 'docker/nginx']
+          ]
+          withCredentials([
+            usernamePassword(credentialsId: 'harbor-credential-id', usernameVariable: 'HARBOR_USER', passwordVariable: 'HARBOR_PASSWORD')
+          ]) {
+            sh '''
+              set -e
+              echo "$HARBOR_PASSWORD" | docker login ${REGISTRY} -u "$HARBOR_USER" --password-stdin
+            '''
+            services.each { svc ->
+              sh """
+                set -e
+                docker build -t ${REGISTRY}/${HARBOR_PROJECT}/${svc.name}:${env.IMAGE_TAG} \
+                  --build-arg BUILD_DATE=${env.BUILD_DATE} \
+                  --build-arg VCS_REF=${env.GIT_COMMIT} \
+                  -f ${svc.context}/dockerfile ${svc.context}
+                docker push ${REGISTRY}/${HARBOR_PROJECT}/${svc.name}:${env.IMAGE_TAG}
+                docker tag ${REGISTRY}/${HARBOR_PROJECT}/${svc.name}:${env.IMAGE_TAG} ${REGISTRY}/${HARBOR_PROJECT}/${svc.name}:latest
+                docker push ${REGISTRY}/${HARBOR_PROJECT}/${svc.name}:latest
+              """
+            }
+          }
+        }
+      }
+    }
+    stage('Deploy to Kubernetes') {
+      steps {
+        script {
+          withCredentials([
+            file(credentialsId: 'kubeconfig-ruoyi', variable: 'KUBECONFIG_FILE')
+          ]) {
+            sh """
+              set -e
+              export KUBECONFIG=${KUBECONFIG_FILE}
+              kubectl apply -k deploy/k8s/overlays/prod
+              kubectl set image deployment/ruoyi-gateway ruoyi-gateway=${REGISTRY}/${HARBOR_PROJECT}/ruoyi-gateway:${env.IMAGE_TAG} -n ${K8S_NAMESPACE}
+              kubectl set image deployment/ruoyi-auth ruoyi-auth=${REGISTRY}/${HARBOR_PROJECT}/ruoyi-auth:${env.IMAGE_TAG} -n ${K8S_NAMESPACE}
+              kubectl set image deployment/ruoyi-system ruoyi-system=${REGISTRY}/${HARBOR_PROJECT}/ruoyi-modules-system:${env.IMAGE_TAG} -n ${K8S_NAMESPACE}
+              kubectl set image deployment/ruoyi-file ruoyi-file=${REGISTRY}/${HARBOR_PROJECT}/ruoyi-modules-file:${env.IMAGE_TAG} -n ${K8S_NAMESPACE}
+              kubectl set image deployment/ruoyi-gen ruoyi-gen=${REGISTRY}/${HARBOR_PROJECT}/ruoyi-modules-gen:${env.IMAGE_TAG} -n ${K8S_NAMESPACE}
+              kubectl set image deployment/ruoyi-job ruoyi-job=${REGISTRY}/${HARBOR_PROJECT}/ruoyi-modules-job:${env.IMAGE_TAG} -n ${K8S_NAMESPACE}
+              kubectl set image deployment/ruoyi-monitor ruoyi-monitor=${REGISTRY}/${HARBOR_PROJECT}/ruoyi-visual-monitor:${env.IMAGE_TAG} -n ${K8S_NAMESPACE}
+              kubectl set image deployment/ruoyi-ui ruoyi-ui=${REGISTRY}/${HARBOR_PROJECT}/ruoyi-ui:${env.IMAGE_TAG} -n ${K8S_NAMESPACE}
+            """
+          }
+        }
+      }
+    }
+  }
+  post {
+    success {
+      echo "Pipeline finished successfully"
+    }
+    failure {
+      echo "Pipeline failed"
+    }
+    always {
+      sh 'docker image prune -f || true'
+    }
+  }
+}
